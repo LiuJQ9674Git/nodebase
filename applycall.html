@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+<script>
+
+//定义一个全局函数
+function foo() {
+    console.log(this.fruit);
+}
+//定义一个全局变量
+var fruit = "apple";
+// 自定义一个对象
+var pack = {
+    fruit: "orange"
+};
+//此时foo中的this === pack
+console.log("pack");
+foo.apply(pack);  // "orange"
+console.log("orange");
+
+function aa(_dereq_,module,exports){
+
+console.log("_dereq_->",_dereq_);
+console.log("module->",module);
+console.log("exports->",exports);
+console.log("all->",arguments);
+}
+
+var n=100,e={};
+var exports={};
+var l={exports:{}};//定义exports,定义变量L
+
+aa.call(l,exports,
+	function(e){//第二个参数，参数e为1,19
+      var n=10;
+    },
+	n,
+	e,
+	l,
+    l.exports
+	)
+
+
+
+
+</script>
+</body>
+</html>

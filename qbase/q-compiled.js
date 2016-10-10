@@ -1039,7 +1039,7 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
             return;
         }
         if ((typeof process === "undefined" ? "undefined" : _typeof(process)) === "object" && typeof process.emit === "function") {
-            Q.nextTick.runAfter(function () {
+            Q.nextTick.runAfter(function () {//
                 if (array_indexOf(unhandledRejections, promise) !== -1) {
                     process.emit("unhandledRejection", reason, promise);
                     reportedUnhandledRejections.push(promise);
@@ -1063,7 +1063,7 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
         var at = array_indexOf(unhandledRejections, promise);
         if (at !== -1) {
             if ((typeof process === "undefined" ? "undefined" : _typeof(process)) === "object" && typeof process.emit === "function") {
-                Q.nextTick.runAfter(function () {
+                Q.nextTick.runAfter(function () {//
                     var atReport = array_indexOf(reportedUnhandledRejections, promise);
                     if (atReport !== -1) {
                         process.emit("rejectionHandled", unhandledReasons[at], promise);

@@ -23,12 +23,7 @@
 
     // <script>
     } else if (typeof window !== "undefined" || typeof self !== "undefined") {
-        // Prefer window over self for add-on scripts. Use self for
-        // non-windowed contexts.
         var global = typeof window !== "undefined" ? window : self;
-
-        // Get the `window` object, save the previous Q global
-        // and initialize Q as a global.
         var previousQ = global.Q;
         global.Q = definition();
 
@@ -53,57 +48,134 @@ try {
     hasStacks = !!e.stack;
 }
 
-// All code after this point will be filtered from stack traces reported
-// by Q.
+
+
+/**
+ * Controls whether or not long stack traces will be on
+*/
+Q.longStackSupport = false;
+
+// enable long stacks if Q_DEBUG is set
+ if (typeof process === "object" && process && process.env && process.env.Q_DEBUG) {
+    Q.longStackSupport = true;
+}
 var qStartingLine = captureLine();
 var qFileName;
 
-// shims
-
 // used for fallback in "allResolved"
 var noop = function () {};
+////////////////////////////                           map                               //////////////////////////////
+// Attempt to make generics产品 safe in the face of downstream 向下流（上下文）
+// modifications修改.
+//如果需求与一个安全保障，这是必须的，如果不需要安全保障，这么做是偏执的
+//然而，这可能降低调用x.call的代码修改的最小影响，而使用x
+    var call = Function.call;
+    function uncurryThis(f) {//不使用当前的this function(callcak,base){..........}
+        return function () {//arguments:array[0] , function(callback,base), undefined
+            return call.apply(f, arguments);//在f上调用call方法
+        };
+    }
 
+    /**
+     * arr.reduce(callback[, initialValue])
+     * reduce() 方法接收一个函数作为累加器（accumulator），数组中的每个值（从左到右）开始缩减，最终为一个值。
+     * callback执行数组中每个值的函数，包含四个参数:
+     *      previousValue上一次调用回调函数返回的值，或者是提供的初始值（initialValue）
+     *      currentValue数组中当前被处理的元素
+     *      currentIndex当前被处理元素在数组中的索引, 即currentValue的索引.
+     *                  如果有initialValue初始值, 从0开始.如果没有从1开始.
+     *      array调用reduce的数组
+     * initialValue可选参数, 作为第一次调用callback的第一个参数。
+     **/
+    var array_reduce = uncurryThis(//f
+        //Array.prototype.reduce || function (callback, basis)
+        function (callback, basis) {//运行call之后，参数向后移动一位
+            var index = 0,
+                length = this.length;//Array
+            // concerning the initial value, if one is not provided
+            if (arguments.length === 1) {//
+                // seek to the first value in the array, accounting
+                // for the possibility that is is a sparse array
+                do {
+                    if (index in this) {
+                        basis = this[index++];
+                        break;
+                    }
+                    if (++index >= length) {
+                        throw new TypeError();
+                    }
+                } while (1);
+            }//一个参数
+            // reduce
+            for (; index < length; index++) {
+                // account for the possibility that the array is sparse
+                if (index in this) {
+                    //callback(value, t[k], k, t);
+                    //basis: previousValue  上次计算值，或初始值
+                    //this[index]:   currentValue数组中当前被处理的元素
+                    //index: 当前被处理元素在数组中的索引, 即currentValue的索引
+                    basis = callback(basis, this[index], index);//
+                }
+            }
+            return basis;
+        }//
+    );//array_reduce over
+
+    Q.array_reduce = array_reduce;
+    
 // Use the fastest possible means to execute a task in a future turn
 // of the event loop.
+// 在事件运行的下一个转向中，尽快执行下一个任务
 var nextTick =(function () {
     // linked list of tasks (single, with head node)
     var head = {task: void 0, next: null};
+    //队列的头和未
     var tail = head;
+    //
     var flushing = false;
+    //异步执行方法
     var requestTick = void 0;
     var isNodeJS = false;
     // queue for late tasks, used by unhandled rejection tracking
     var laterQueue = [];
-
+    //奔流、冲洗
+    //异步动作
     function flush() {
         /* jshint loopfunc: true */
         var task, domain;
-
+        //队列头
         while (head.next) {
-            head = head.next;
-            task = head.task;
+            head = head.next;//获取下一个任务
+            task = head.task;//获取任务
             head.task = void 0;
-            domain = head.domain;
+            domain = head.domain;//Nodejs、浏览器等区分
 
-            if (domain) {
-                head.domain = void 0;
+            if (domain) {//如果有domain
+                head.domain = void 0;//JS传值引用
                 domain.enter();
             }
+            //运行单个任务
             runSingle(task, domain);
 
-        }
-        while (laterQueue.length) {
-            task = laterQueue.pop();
+        }//head.next while over
+        while (laterQueue.length) {//
+            task = laterQueue.pop();//task为flush
             runSingle(task);
-        }
+        }//while over
         flushing = false;
-    }
+    }//over
+
     // runs a single function in the async queue
+    /**
+     * 运行任务的入口方法
+     * @param task  flush
+     * @param domain Nodejs、Brower
+     */
     function runSingle(task, domain) {
         try {
             task();
 
-        } catch (e) {
+        } catch (e) {//任务失败
             if (isNodeJS) {
                 // In node, uncaught exceptions are considered fatal errors.
                 // Re-throw them synchronously to interrupt flushing!
@@ -124,30 +196,35 @@ var nextTick =(function () {
             } else {
                 // In browsers, uncaught exceptions are not fatal.
                 // Re-throw them asynchronously to avoid slow-downs.
-                setTimeout(function () {
+                setTimeout(function () {//浏览器使用setItemout
                     throw e;
                 }, 0);
             }
-        }
+        }//
 
         if (domain) {
             domain.exit();
         }
     }
 
-    nextTick = function (task) {
+    //定义下一个动作
+    //neextTick包括runAfter
+    nextTick = function (task) {//task为flush
         tail = tail.next = {
             task: task,
-            domain: isNodeJS && process.domain,
+            domain: isNodeJS && process.domain,//window或者Nodejs
             next: null
         };
 
         if (!flushing) {
             flushing = true;
-            requestTick();
+            requestTick();//入口执行异步操作
         }
-    };
+    };//nextTick over
 
+    //Node环境，使用进程执行nextTick
+    //异步操作，使用进程或者setImmediate异步执行
+    //根据运行环境定义requestTick函数，它是异步的执行
     if (typeof process === "object" &&
         process.toString() === "[object process]" && process.nextTick) {
         // Ensure Q is in a real Node environment, with a `process.nextTick`.
@@ -159,22 +236,22 @@ var nextTick =(function () {
         //   "[object Object]", while in a real Node environment
         //   `process.nextTick()` yields "[object process]".
         isNodeJS = true;
-
+        //
         requestTick = function () {
             process.nextTick(flush);
         };
 
-    } else if (typeof setImmediate === "function") {
+    } else if (typeof setImmediate === "function") {//浏览器
         // In IE10, Node.js 0.9+, or https://github.com/NobleJS/setImmediate
         if (typeof window !== "undefined") {
-            requestTick = setImmediate.bind(window, flush);
+            requestTick = setImmediate.bind(window, flush);//使用setImmediate
         } else {
             requestTick = function () {
                 setImmediate(flush);
             };
         }
 
-    } else if (typeof MessageChannel !== "undefined") {
+    } else if (typeof MessageChannel !== "undefined") {//消息通道
         // modern browsers
         // http://www.nonblocking.io/2011/06/windownexttick.html
         var channel = new MessageChannel();
@@ -205,289 +282,197 @@ var nextTick =(function () {
     // this is useful for unhandled rejection tracking that needs to happen
     // after all `then`d tasks have been run.
     nextTick.runAfter = function (task) {
-        laterQueue.push(task);
+        laterQueue.push(task);//任务进入队列
         if (!flushing) {
             flushing = true;
             requestTick();
         }
     };
     return nextTick;
-})();
+})();//nextTick over
 
-// Attempt to make generics safe in the face of downstream
-// modifications.
-// There is no situation where this is necessary.
-// If you need a security guarantee, these primordials need to be
-// deeply frozen anyway, and if you don’t need a security guarantee,
-// this is just plain paranoid.
-// However, this **might** have the nice side-effect of reducing the size of
-// the minified code by reducing x.call() to merely x()
-// See Mark Miller’s explanation of what this does.
-// http://wiki.ecmascript.org/doku.php?id=conventions:safe_meta_programming
-var call = Function.call;
-function uncurryThis(f) {
-    return function () {
-        return call.apply(f, arguments);
-    };
-}
-// This is equivalent, but slower:
-// uncurryThis = Function_bind.bind(Function_bind.call);
-// http://jsperf.com/uncurrythis
+    /**
+     * Performs a task in a future turn of the event loop.
+     * 使用nextTick的函数
+     *      defer
+     *      defer内部方法become
+     *      defer.notify
+     *      coerce
+     *      promise.promiseDispatch
+     *      Promise.prototype.then
+     *      Promise.prototype.dispatch
+     *      Promise.prototype.done
+     *      Promise.prototype.nodeify
+     *
+     * @param {Function} task
+     */
+    Q.nextTick = nextTick;
 
-var array_slice = uncurryThis(Array.prototype.slice);
-
-var array_reduce = uncurryThis(
-    Array.prototype.reduce || function (callback, basis) {
-        var index = 0,
-            length = this.length;
-        // concerning the initial value, if one is not provided
-        if (arguments.length === 1) {
-            // seek to the first value in the array, accounting
-            // for the possibility that is is a sparse array
-            do {
-                if (index in this) {
-                    basis = this[index++];
-                    break;
-                }
-                if (++index >= length) {
-                    throw new TypeError();
-                }
-            } while (1);
-        }
-        // reduce
-        for (; index < length; index++) {
-            // account for the possibility that the array is sparse
-            if (index in this) {
-                basis = callback(basis, this[index], index);
-            }
-        }
-        return basis;
-    }
-);
-
-var array_indexOf = uncurryThis(
-    Array.prototype.indexOf || function (value) {
-        // not a very good shim, but good enough for our one use of it
-        for (var i = 0; i < this.length; i++) {
-            if (this[i] === value) {
-                return i;
-            }
-        }
-        return -1;
-    }
-);
-
-var array_map = uncurryThis(
-    Array.prototype.map || function (callback, thisp) {
-        var self = this;
-        var collect = [];
-        array_reduce(self, function (undefined, value, index) {
-            collect.push(callback.call(thisp, value, index, self));
-        }, void 0);
-        return collect;
-    }
-);
-
-var object_create = Object.create || function (prototype) {
-    function Type() { }
-    Type.prototype = prototype;
-    return new Type();
-};
-
-var object_hasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
-
-var object_keys = Object.keys || function (object) {
-    var keys = [];
-    for (var key in object) {
-        if (object_hasOwnProperty(object, key)) {
-            keys.push(key);
-        }
-    }
-    return keys;
-};
-
-var object_toString = uncurryThis(Object.prototype.toString);
-
-function isObject(value) {
-    return value === Object(value);
-}
-
-// generator related shims
-
-// FIXME: Remove this function once ES6 generators are in SpiderMonkey.
-function isStopIteration(exception) {
-    return (
-        object_toString(exception) === "[object StopIteration]" ||
-        exception instanceof QReturnValue
-    );
-}
-
-// FIXME: Remove this helper and Q.return once ES6 generators are in
-// SpiderMonkey.
-var QReturnValue;
-if (typeof ReturnValue !== "undefined") {
-    QReturnValue = ReturnValue;
-} else {
-    QReturnValue = function (value) {
-        this.value = value;
-    };
-}
-
-// long stack traces
-
-var STACK_JUMP_SEPARATOR = "From previous event:";
-
-function makeStackTraceLong(error, promise) {
-    // If possible, transform the error stack trace by removing Node and Q
-    // cruft, then concatenating with the stack trace of `promise`. See #57.
-    if (hasStacks &&
-        promise.stack &&
-        typeof error === "object" &&
-        error !== null &&
-        error.stack &&
-        error.stack.indexOf(STACK_JUMP_SEPARATOR) === -1
-    ) {
-        var stacks = [];
-        for (var p = promise; !!p; p = p.source) {
-            if (p.stack) {
-                stacks.unshift(p.stack);
-            }
-        }
-        stacks.unshift(error.stack);
-
-        var concatedStacks = stacks.join("\n" + STACK_JUMP_SEPARATOR + "\n");
-        error.stack = filterStackString(concatedStacks);
-    }
-}
-
-function filterStackString(stackString) {
-    var lines = stackString.split("\n");
-    var desiredLines = [];
-    for (var i = 0; i < lines.length; ++i) {
-        var line = lines[i];
-
-        if (!isInternalFrame(line) && !isNodeFrame(line) && line) {
-            desiredLines.push(line);
-        }
-    }
-    return desiredLines.join("\n");
-}
-
-function isNodeFrame(stackLine) {
-    return stackLine.indexOf("(module.js:") !== -1 ||
-           stackLine.indexOf("(node.js:") !== -1;
-}
-
-function getFileNameAndLineNumber(stackLine) {
-    // Named functions: "at functionName (filename:lineNumber:columnNumber)"
-    // In IE10 function name can have spaces ("Anonymous function") O_o
-    var attempt1 = /at .+ \((.+):(\d+):(?:\d+)\)$/.exec(stackLine);
-    if (attempt1) {
-        return [attempt1[1], Number(attempt1[2])];
-    }
-
-    // Anonymous functions: "at filename:lineNumber:columnNumber"
-    var attempt2 = /at ([^ ]+):(\d+):(?:\d+)$/.exec(stackLine);
-    if (attempt2) {
-        return [attempt2[1], Number(attempt2[2])];
-    }
-
-    // Firefox style: "function@filename:lineNumber or @filename:lineNumber"
-    var attempt3 = /.*@(.+):(\d+)$/.exec(stackLine);
-    if (attempt3) {
-        return [attempt3[1], Number(attempt3[2])];
-    }
-}
-
-function isInternalFrame(stackLine) {
-    var fileNameAndLineNumber = getFileNameAndLineNumber(stackLine);
-
-    if (!fileNameAndLineNumber) {
-        return false;
-    }
-
-    var fileName = fileNameAndLineNumber[0];
-    var lineNumber = fileNameAndLineNumber[1];
-
-    return fileName === qFileName &&
-        lineNumber >= qStartingLine &&
-        lineNumber <= qEndingLine;
-}
-
-// discover own file name and line number range for filtering stack
-// traces
-function captureLine() {
-    if (!hasStacks) {
-        return;
-    }
-
-    try {
-        throw new Error();
-    } catch (e) {
-        var lines = e.stack.split("\n");
-        var firstLine = lines[0].indexOf("@") > 0 ? lines[1] : lines[2];
-        var fileNameAndLineNumber = getFileNameAndLineNumber(firstLine);
-        if (!fileNameAndLineNumber) {
-            return;
-        }
-
-        qFileName = fileNameAndLineNumber[0];
-        return fileNameAndLineNumber[1];
-    }
-}
-
-function deprecate(callback, name, alternative) {
-    return function () {
-        if (typeof console !== "undefined" &&
-            typeof console.warn === "function") {
-            console.warn(name + " is deprecated, use " + alternative +
-                         " instead.", new Error("").stack);
-        }
-        return callback.apply(callback, arguments);
-    };
-}
-
-// end of shims
-// beginning of real work
-
+//实际的类定义
 /**
  * Constructs a promise for an immediate reference, passes promises through, or
  * coerces promises from different systems.
+ * Q为返回的类
+ *  类方法
+ *      resolve
+ *      nextTick
+ *      longStackSupport
+ *      defer
+ *      passByCopy
+ *      join
+ *
+ * promise构造函数
  * @param value immediate reference or promise
  */
-function Q(value) {
-    // If the object is already a Promise, return it directly.  This enables
-    // the resolve function to both be used to created references from objects,
-    // but to tolerably coerce non-promises to promises.
-    if (value instanceof Promise) {
-        return value;
+//////////////////////////                       Q相关操作             /////////////////////////////////////////////////
+    //1.Q
+    //2.fulfill
+    //3.coerce
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    function Q(value) {//内部调用fulfill,fulill是内部代码唯一实例化Promise的场景
+        // If the object is already a Promise, return it directly.  This enables
+        // the resolve function to both be used to created references from objects,
+        // but to tolerably容忍 coerce限制 non-promises to promises.
+        if (value instanceof Promise) {//如果是Promise则返回
+            return value;
+        }
+
+        // assimilate thenables
+        if (isPromiseAlike(value)) {
+            return coerce(value);//强制转换为Q
+        } else {
+            return fulfill(value);//完成
+        }
+    }//Q-Over
+    Q.resolve = Q;
+
+    /**
+     * Constructs a fulfilled promise for an immediate reference.
+     * fulfill对象处理的字面对象函数
+     * Promise(descriptor, fallback, inspect)
+     * {
+ *      when
+ *      get
+ *      set
+ *      delete
+ *      post
+ *      apply
+ *      keys
+ *  }
+     *  fallback:   void 0
+     *  inspect:    { state: "fulfilled", value: value }
+     * @param value immediate reference
+     */
+    Q.fulfill = fulfill;
+    function fulfill(value) {
+        return Promise({
+                "when": function () {//执行when
+                    return value;//
+                },
+                "get": function (name) {
+                    return value[name];
+                },
+                "set": function (name, rhs) {
+                    value[name] = rhs;//
+                },
+                "delete": function (name) {
+                    delete value[name];
+                },
+                "post": function (name, args) {
+                    // Mark Miller proposes that post with no name should apply a
+                    // promised function.
+                    if (name === null || name === void 0) {
+                        return value.apply(void 0, args);//
+                    } else {
+                        return value[name].apply(value, args);//
+                    }
+                },
+                "apply": function (thisp, args) {
+                    return value.apply(thisp, args);
+                },
+                "keys": function () {
+                    return object_keys(value);
+                }
+            },
+            void 0,
+
+            function inspect() {
+                return { state: "fulfilled", value: value };
+            });
     }
 
-    // assimilate thenables
-    if (isPromiseAlike(value)) {
-        return coerce(value);
-    } else {
-        return fulfill(value);
+    /**
+     * Converts thenables to Q promises.
+     * @param promise thenable promise
+     * @returns a Q promise
+     */
+    function coerce(promise) {
+        var deferred = defer();
+        Q.nextTick(function () {
+            try {
+                promise.then(deferred.resolve, deferred.reject, deferred.notify);
+            } catch (exception) {
+                deferred.reject(exception);
+            }
+        });
+        return deferred.promise;
     }
-}
-Q.resolve = Q;
+/////////////////////////////             Q相关操作结束                                       //////////////////////////
 
-/**
- * Performs a task in a future turn of the event loop.
- * @param {Function} task
- */
-Q.nextTick = nextTick;
+///////////////////////////               核心生成Promise的方法                                ////////////////////////
+                          //1.promise
+                          //2.fcall/dispatch
+    //
+    /**
+     * @param resolver {Function} a function that returns nothing and accepts
+     * the resolve, reject, and notify functions for a deferred.
+     * @returns a promise that may be resolved with the given resolve and reject
+     * functions, or rejected by a thrown exception in resolver
+     */
+    Q.Promise = promise; // ES6
+    Q.promise = promise;
+    /**
+     *promise类方法，ES6方法
+     *  race
+     *  all
+     *  reject
+     *  resolve
+     *
+     */
+    //resolver传入的参数，由客户端定义
+    function promise(resolver) {
+        if (typeof resolver !== "function") {
+            throw new TypeError("resolver must be a function.");
+        }
+        var deferred = defer();
+        try {
+            //resolver为客户端的函数，resolve创建另一个Promise
+            resolver(deferred.resolve, deferred.reject, deferred.notify);
+        } catch (reason) {
+            deferred.reject(reason);
+        }
+        return deferred.promise;//由
+    }
 
-/**
- * Controls whether or not long stack traces will be on
- */
-Q.longStackSupport = false;
+    /**
+     * Calls the promised function in a future turn.
+     * @param object    promise or immediate reference for target function
+     * @param ...args   array of application arguments
+     */
+    Q["try"] =
+        Q.fcall = function (object /* ...args*/) {
+            return Q(object).dispatch("apply", [void 0, array_slice(arguments, 1)]);
+        };
 
-// enable long stacks if Q_DEBUG is set
-if (typeof process === "object" && process && process.env && process.env.Q_DEBUG) {
-    Q.longStackSupport = true;
-}
+    Promise.prototype.fcall = function (/*...args*/) {
+        return this.dispatch("apply", [void 0, array_slice(arguments)]);
+    };
 
+/////////////////////////////////        Promise三个核心函数                                  /////////////////////////
+                                //1.defer
+                                //2.Promise
+                                //3.then
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
  * Constructs a {promise, resolve, reject} object.
  *
@@ -505,28 +490,36 @@ function defer() {
     // element of the messages array is itself an array of complete arguments to
     // forward to the resolved promise.  We coerce the resolution value to a
     // promise using the `resolve` function because it handles both fully
-    // non-thenable values and other thenables gracefully.
+    // non-thenable values and other thenables gracefully.优雅地
+    //如果messages是一个数组，表示promise仍然没有完成
+    //如果是undefined，则表示已经完成resolved
+    //message数组的每个元素本身是一个需要完成的Promise的数组
+    //我们使用resolve函数强制转换一个完成值为Promise
     var messages = [], progressListeners = [], resolvedPromise;
-
+    //实例化deferred，deferred的实例方法包括：
+    /**
+     * deferred实例包括方法、实例
+     * 对象变量
+     *      promise
+     * 方法
+     *      resolve
+     *      fulfill
+     *      reject
+     *      notify
+     */
     var deferred = object_create(defer.prototype);
+
+    //promise实例方法包括:
+    //promise.promiseDispatch
+    //promise.valueOf
+    //promise.inspect
+    //promise实例的实例变量
+    //promise.stack
     var promise = object_create(Promise.prototype);
 
-    promise.promiseDispatch = function (resolve, op, operands) {
-        var args = array_slice(arguments);
-        if (messages) {
-            messages.push(args);
-            if (op === "when" && operands[1]) { // progress operand
-                progressListeners.push(operands[1]);
-            }
-        } else {
-            Q.nextTick(function () {
-                resolvedPromise.promiseDispatch.apply(resolvedPromise, args);
-            });
-        }
-    };
 
     // XXX deprecated
-    promise.valueOf = function () {
+    promise.valueOf = function () {//defer  valueOf
         if (messages) {
             return promise;
         }
@@ -536,14 +529,14 @@ function defer() {
         }
         return nearerValue;
     };
-
-    promise.inspect = function () {
-        if (!resolvedPromise) {
+    //检查
+    promise.inspect = function () {//defer  inspect
+        if (!resolvedPromise) {//
             return { state: "pending" };
         }
         return resolvedPromise.inspect();
     };
-
+    //
     if (Q.longStackSupport && hasStacks) {
         try {
             throw new Error();
@@ -558,11 +551,45 @@ function defer() {
         }
     }
 
-    // NOTE: we do the checks for `resolvedPromise` in each method, instead of
-    // consolidating them into `become`, since otherwise we'd create new
-    // promises with the lines `become(whatever(value))`. See e.g. GH-252.
+    //在defer中定义promiseDispatchTick，此方法仅仅在then中调用
+    //把任务，即then中的函数放入到执行队列中promiseDispatchToTick，此方法仅仅由then进行两次调用
+    //在then方法中有两处调用此方法
+    // Q.nextTick加入异步队列中
+    /**
+     *
+     * @param resolve 回调函数
+     * @param op    规定操作，when/apply/pose/value
+     * @param operands 为具体的操作数组
+     */
+    promise.promiseDispatch= function (resolve, op, operands) {//defer promiseDispatch
+        //由then方法调用时，获取参数
+        var args = array_slice(arguments);//参数转换为数组
+        //Messages由become设置为undifined,void 0。
+        //becoms由defer的方法调用，实例化Promise时，defer装载定义，不执行方法。
+        //在执行defer的方法，如resolve。调用becomse，此方法设置messages为undefined
 
-    function become(newPromise) {
+        if (messages) {//每次进入时，messages为[],但是存在
+            messages.push(args);//每次message仅仅存入参数,验证如果是operands[1]，在then函数
+            if (op === "when" && operands[1]) { // progress operand
+                progressListeners.push(operands[1]);//加入到监听队列
+            }
+        } else {//
+          Q.nextTick(function () {//LiuJQ L850为Promise的promiseDispatch
+                //由Promise中定义，调用promiseDispatchReal-3
+                resolvedPromise.promiseDispatch.apply(resolvedPromise, args);
+                //resolvedPromise.promiseDispatchReal(resolve, op, operands);
+                
+            });
+        }
+    };
+
+    // NOTE: we do the checks for `resolvedPromise` in each method, instead of
+    // consolidating巩固，加强 them into `become`, since otherwise we'd create new
+    // promises with the lines `become(whatever(value))`. See e.g. GH-252.
+    //采用在每个方法中检查resolvedPromise，而不是强制使它们转换become
+    //其原因是become(whatever(value))将新创建一个Promise
+    function become(newPromise) {//
+        //具体的Promise，在new Q.Promise(function(resolve, reject)中
         resolvedPromise = newPromise;
 
         if (Q.longStackSupport && hasStacks) {
@@ -570,24 +597,34 @@ function defer() {
             // are enabled to reduce memory usage
             promise.source = newPromise;
         }
+        var localPromise=newPromise;
+        //message callback undefined
+        //异步求值的第二部分，执行
+        array_reduce(//{message,function,void 0}
+            messages,//message的数组的每个值调用promiseDispatch方法
+            function (undefined, message) {//回调函数
+                Q.nextTick(function () {//
+                    //Modified by LiuJQ
+                    //由Promise中定义，调用promiseDispatchReal-1
+                    newPromise.promiseDispatch.apply(newPromise, message);
+             });
+            },
+            void 0
+        );
+        //
+        messages = void 0;//消息数组设置为空
+        progressListeners = void 0;//监听设置为空
+    }//
 
-        array_reduce(messages, function (undefined, message) {
-            Q.nextTick(function () {
-                newPromise.promiseDispatch.apply(newPromise, message);
-            });
-        }, void 0);
-
-        messages = void 0;
-        progressListeners = void 0;
-    }
-
+    ///////////////////////////                    defer over                           ////////////////////////////////
     deferred.promise = promise;
-    deferred.resolve = function (value) {
-        if (resolvedPromise) {
+    //resolve由defer提供
+    deferred.resolve = function (value) {//由客户端调用
+        if (resolvedPromise) {//存在则返回
             return;
         }
-
-        become(Q(value));
+        //实例化Q
+        become(Q(value));//Q中实例化Promise
     };
 
     deferred.fulfill = function (value) {
@@ -608,7 +645,7 @@ function defer() {
         if (resolvedPromise) {
             return;
         }
-
+        //
         array_reduce(progressListeners, function (undefined, progressListener) {
             Q.nextTick(function () {
                 progressListener(progress);
@@ -619,199 +656,28 @@ function defer() {
     return deferred;
 }
 
-/**
- * Creates a Node-style callback that will resolve or reject the deferred
- * promise.
- * @returns a nodeback
- */
-defer.prototype.makeNodeResolver = function () {
-    var self = this;
-    return function (error, value) {
-        if (error) {
-            self.reject(error);
-        } else if (arguments.length > 2) {
-            self.resolve(array_slice(arguments, 1));
-        } else {
-            self.resolve(value);
-        }
-    };
-};
+////////////////////////                      deferred定义结束                                   /////////////////////
 
-/**
- * @param resolver {Function} a function that returns nothing and accepts
- * the resolve, reject, and notify functions for a deferred.
- * @returns a promise that may be resolved with the given resolve and reject
- * functions, or rejected by a thrown exception in resolver
- */
-Q.Promise = promise; // ES6
-Q.promise = promise;
-function promise(resolver) {
-    if (typeof resolver !== "function") {
-        throw new TypeError("resolver must be a function.");
-    }
-    var deferred = defer();
-    try {
-        resolver(deferred.resolve, deferred.reject, deferred.notify);
-    } catch (reason) {
-        deferred.reject(reason);
-    }
-    return deferred.promise;
-}
-
-promise.race = race; // ES6
-promise.all = all; // ES6
-promise.reject = reject; // ES6
-promise.resolve = Q; // ES6
-
-// XXX experimental.  This method is a way to denote that a local value is
-// serializable and should be immediately dispatched to a remote upon request,
-// instead of passing a reference.
-Q.passByCopy = function (object) {
-    //freeze(object);
-    //passByCopies.set(object, true);
-    return object;
-};
-
-Promise.prototype.passByCopy = function () {
-    //freeze(object);
-    //passByCopies.set(object, true);
-    return this;
-};
-
-/**
- * If two promises eventually fulfill to the same value, promises that value,
- * but otherwise rejects.
- * @param x {Any*}
- * @param y {Any*}
- * @returns {Any*} a promise for x and y if they are the same, but a rejection
- * otherwise.
- *
- */
-Q.join = function (x, y) {
-    return Q(x).join(y);
-};
-
-Promise.prototype.join = function (that) {
-    return Q([this, that]).spread(function (x, y) {
-        if (x === y) {
-            // TODO: "===" should be Object.is or equiv
-            return x;
-        } else {
-            throw new Error("Q can't join: not the same: " + x + " " + y);
-        }
-    });
-};
-
-/**
- * Returns a promise for the first of an array of promises to become settled.
- * @param answers {Array[Any*]} promises to race
- * @returns {Any*} the first promise to be settled
- */
-Q.race = race;
-function race(answerPs) {
-    return promise(function (resolve, reject) {
-        // Switch to this once we can assume at least ES5
-        // answerPs.forEach(function (answerP) {
-        //     Q(answerP).then(resolve, reject);
-        // });
-        // Use this in the meantime
-        for (var i = 0, len = answerPs.length; i < len; i++) {
-            Q(answerPs[i]).then(resolve, reject);
-        }
-    });
-}
-
-Promise.prototype.race = function () {
-    return this.then(Q.race);
-};
-
-/**
- * Constructs a Promise with a promise descriptor object and optional fallback
- * function.  The descriptor contains methods like when(rejected), get(name),
- * set(name, value), post(name, args), and delete(name), which all
- * return either a value, a promise for a value, or a rejection.  The fallback
- * accepts the operation name, a resolver, and any further arguments that would
- * have been forwarded to the appropriate method above had a method been
- * provided with the proper name.  The API makes no guarantees about the nature
- * of the returned object, apart from that it is usable whereever promises are
- * bought and sold.
- */
-Q.makePromise = Promise;
-function Promise(descriptor, fallback, inspect) {
-    if (fallback === void 0) {
-        fallback = function (op) {
-            return reject(new Error(
-                "Promise does not support operation: " + op
-            ));
-        };
-    }
-    if (inspect === void 0) {
-        inspect = function () {
-            return {state: "unknown"};
-        };
-    }
-
-    var promise = object_create(Promise.prototype);
-
-    promise.promiseDispatch = function (resolve, op, args) {
-        var result;
-        try {
-            if (descriptor[op]) {
-                result = descriptor[op].apply(promise, args);
-            } else {
-                result = fallback.call(promise, op, args);
-            }
-        } catch (exception) {
-            result = reject(exception);
-        }
-        if (resolve) {
-            resolve(result);
-        }
-    };
-
-    promise.inspect = inspect;
-
-    // XXX deprecated `valueOf` and `exception` support
-    if (inspect) {
-        var inspected = inspect();
-        if (inspected.state === "rejected") {
-            promise.exception = inspected.reason;
-        }
-
-        promise.valueOf = function () {
-            var inspected = inspect();
-            if (inspected.state === "pending" ||
-                inspected.state === "rejected") {
-                return promise;
-            }
-            return inspected.value;
-        };
-    }
-
-    return promise;
-}
-
-Promise.prototype.toString = function () {
-    return "[object Promise]";
-};
-
+//////////////////////////////////          then                           ////////////////////////////////////////////
 Promise.prototype.then = function (fulfilled, rejected, progressed) {
+    //self中promise为promiseDispatchToTick
     var self = this;
-    var deferred = defer();
+    //defer中定义了promise
+    var deferred = defer();//定义延期实例
     var done = false;   // ensure the untrusted promise makes at most a
                         // single call to one of the callbacks
 
     function _fulfilled(value) {
-        try {
+        try {//如果是函数则执行或者值则返回
             return typeof fulfilled === "function" ? fulfilled(value) : value;
         } catch (exception) {
             return reject(exception);
         }
     }
 
-    function _rejected(exception) {
+    function _rejected(exception) {//拒绝
         if (typeof rejected === "function") {
-            makeStackTraceLong(exception, self);
+            makeStackTraceLong(exception, self);//跟踪
             try {
                 return rejected(exception);
             } catch (newException) {
@@ -821,52 +687,355 @@ Promise.prototype.then = function (fulfilled, rejected, progressed) {
         return reject(exception);
     }
 
-    function _progressed(value) {
+    function _progressed(value) {//过程
         return typeof progressed === "function" ? progressed(value) : value;
     }
 
-    Q.nextTick(function () {
-        self.promiseDispatch(function (value) {
-            if (done) {
-                return;
-            }
-            done = true;
-
-            deferred.resolve(_fulfilled(value));
-        }, "when", [function (exception) {
-            if (done) {
-                return;
-            }
-            done = true;
-
-            deferred.resolve(_rejected(exception));
-        }]);
-    });
+    //产生新的Promise实例,异步执行done、when、 function (exception)
+    //nextTick执行过程，Q.nextTick是个异步队列，
+    //function (resolve, op, args).Q.nextTick执行self.promiseDispatch
+    //传入三个参数为function (value)、when、[ function (exception) ]
+    //Q.nextTick异步执行
+    Q.nextTick(function () {//resolve,L575 defer中定义的promise.promiseDispatch
+         //then Q.nextTick promiseDispatchToTick callee
+        //此处的self和defer中定义的是两个不同promise
+        //异步执行
+        self.promiseDispatch(//defer中定义的promiseDispatchToTick-1
+            function (value) {//then Q.nextTick promiseDispatchToTick
+                if (done) {
+                    return;
+                }
+                done = true;
+                //deferz中有自己的promise
+                deferred.resolve(_fulfilled(value));
+            },
+            "when", //op  return value
+             [
+                 function (exception) {//arguments
+                    if (done) {
+                        return;
+                    }
+                    done = true;
+                    deferred.resolve(_rejected(exception));
+                }
+             ]
+        );
+    });//Q.nextTick 调用结束
 
     // Progress propagator need to be attached in the current tick.
-    self.promiseDispatch(void 0, "when", [void 0, function (value) {
-        var newValue;
-        var threw = false;
-        try {
-            newValue = _progressed(value);
-        } catch (e) {
-            threw = true;
-            if (Q.onerror) {
-                Q.onerror(e);
-            } else {
-                throw e;
-            }
-        }
-
-        if (!threw) {
-            deferred.notify(newValue);
-        }
+    //进程传播需要添加到当前的执行点中
+    //         function (resolve,   op,            args) L578 defer中定义的promiseDispatch
+   //then  promiseDispatchToTick callee;
+    //传入三个参数为function (value)、when、[void 0, function (exception) ]
+    //同步执行，获取值后直接放入，如果Message不为空时，放入messages
+    self.promiseDispatch(
+        void 0,
+        "when", [void 0,
+            function (value) {//then直接调用promiseDispatchToTick-2
+                var newValue;
+                var threw = false;
+                try {
+                    newValue = _progressed(value);
+                } catch (e) {
+                    threw = true;
+                    if (Q.onerror) {
+                        Q.onerror(e);
+                    } else {
+                        throw e;
+                    }
+                }
+                if (!threw) {
+                    deferred.notify(newValue);
+                }
     }]);
 
     return deferred.promise;
+};//then over
+///////////////////////////////////////          then over              ///////////////////////////////////////////////
+
+    /**
+     * Constructs a Promise with a promise descriptor object and optional fallback
+     * function.  The descriptor contains methods like when(rejected), get(name),
+     * set(name, value), post(name, args), and delete(name), which all
+     * return either a value, a promise for a value, or a rejection.  The fallback
+     * accepts the operation name, a resolver, and any further arguments that would
+     * have been forwarded to the appropriate method above had a method been
+     * provided with the proper name.  The API makes no guarantees about the nature
+     * of the returned object, apart from that it is usable whereever promises are
+     * bought and sold.
+     */
+/////////////////////////////////                     Promise内部调用的地方如下：//////////////////////////////////////
+    //1.fulfill 由Q调用
+    //2.reject
+    //3.master
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//计算值的方法地方之一
+    Q.makePromise = Promise;
+    function Promise(descriptor, fallback, inspect) {
+        //fulfill调用时，传入的fallback为未定义，inspect为{ state: "fulfilled", value: value }
+        if (fallback === void 0) {//回调方法为null
+            fallback = function (op) {//定义默认的回调方法
+                return reject(new Error(
+                    "Promise does not support operation: " + op
+                ));
+            };
+        }
+        //检查函数初始化状态为未知
+        if (inspect === void 0) {
+            inspect = function () {
+                return {state: "unknown"};
+            };
+        }
+        //创建Promise实例，这里defer调用的代码一样
+        var promise = object_create(Promise.prototype);
+        //定义promise，promiseDispatch调用真实的代码
+        /**
+         * defer.promise、then、dispatch中调用
+         * @param resolve 回调方法
+         * @param op 操作符,when/apply/call
+         * @param args
+         */
+        promise.promiseDispatch = function (resolve, op, args) {//Promise promiseDispatch
+            var result;
+            try {//计算值的方法地方之一
+                if (descriptor[op]) {//promise执行descriptor[op]
+                    result = descriptor[op].apply(promise, args);//在对象promise上运行promise
+                } else {//没有descriptor[op]时，在promise上执行回调
+                    result = fallback.call(promise, op, args);//当不在操作符中调用回调函数descriptor[op]
+                }
+            } catch (exception) {
+                result = reject(exception);
+            }
+
+            if (resolve) {//resolve由方法传入进来
+                resolve(result);
+            }
+        };
+        //
+        promise.inspect = inspect;
+
+        // XXX deprecated `valueOf` and `exception` support
+        if (inspect) {//状态检查存在
+            var inspected = inspect();
+            if (inspected.state === "rejected") {//状态为拒绝
+                promise.exception = inspected.reason;
+            }
+
+            promise.valueOf = function () {//Promise 定义valueOf方法
+                var inspected = inspect();
+                if (inspected.state === "pending" ||
+                    inspected.state === "rejected") {
+                    return promise;
+                }
+                return inspected.value;
+            };
+        }
+        //Promise中的primse不由defer创建
+        return promise;
+    }//Promise over
+///////////////////////////////////                Promise over                          ///////////////////////////////
+
+    /**
+     * sends a message to a value in a future turn
+     * @param object* the recipient
+     * @param op the name of the message operation, e.g., "when",
+     * @param args further arguments to be forwarded to the operation
+     * @returns result {Promise} a promise for the result of the operation
+     */
+    Q.dispatch = dispatch;
+    function dispatch(object, op, args) {//
+        return Q(object).dispatch(op, args);
+    }
+
+    Promise.prototype.dispatch = function (op, args) {
+        //其调用者为Q(object)，生成的Promise中的promise实例，包括promiseDispatchReal
+        var self = this;//闭包，变量不变
+        var deferred = defer();
+        Q.nextTick(function () {//由Promise中定义，dispatch 调用promiseDispatchReal-2
+            //resovle值为：deferred.resolve = function (value)
+            self.promiseDispatch(deferred.resolve, op, args);
+
+        });
+        //primse的方法
+        return deferred.promise;
+    };
+    /**
+      function promise(resolver) {
+        if (typeof resolver !== "function") {
+            throw new TypeError("resolver must be a function.");
+        }
+        var deferred = defer();
+        try {
+            //resolver为客户端的函数，resolve创建另一个Promise
+            resolver(deferred.resolve, deferred.reject, deferred.notify);
+        } catch (reason) {
+            deferred.reject(reason);
+        }
+        return deferred.promise;//由
+    }
+     */
+    //////////////////////////////////////////////////////////////////////////////////
+    /**
+     * Terminates a chain of promises, forcing rejections to be
+     * thrown as exceptions.
+     * @param {Any*} promise at the end of a chain of promises
+     * @returns nothing
+     */
+    Q.done = function (object, fulfilled, rejected, progress) {
+        return Q(object).done(fulfilled, rejected, progress);
+    };
+
+    Promise.prototype.done = function (fulfilled, rejected, progress) {
+        var onUnhandledError = function (error) {
+            // forward to a future turn so that ``when``
+            // does not catch it and turn it into a rejection.
+            Q.nextTick(function () {
+                makeStackTraceLong(error, promise);
+                if (Q.onerror) {
+                    Q.onerror(error);
+                } else {
+                    throw error;
+                }
+            });
+        };
+
+        // Avoid unnecessary `nextTick`ing via an unnecessary `when`.
+        var promise = fulfilled || rejected || progress ?
+            this.then(fulfilled, rejected, progress) :
+            this;
+
+        if (typeof process === "object" && process && process.domain) {
+            onUnhandledError = process.domain.bind(onUnhandledError);
+        }
+
+        promise.then(void 0, onUnhandledError);
+    };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* *************************************************************************************************************     */
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * The promised function decorator ensures that any promise arguments
+     * are settled and passed as values (`this` is also settled and passed
+     * as a value).  It will also ensure that the result of a function is
+     * always a promise.
+     *
+     * @example
+     * var add = Q.promised(function (a, b) {
+ *     return a + b;
+ * });
+     * add(Q(a), Q(B));
+     *
+     * @param {function} callback The function to decorate
+     * @returns {function} a function that has been decorated.
+     */
+    Q.promised = promised;
+    function promised(callback) {
+        return function () {
+            return spread([this, all(arguments)], function (self, args) {
+                return callback.apply(self, args);
+            });
+        };
+    }
+
+
+
+//////////////////////////////////////////////////////////////////////
+
+    /**
+     * Creates a Node-style callback that will resolve or reject the deferred
+     * Node风格回调方法
+     * promise.
+     * @returns a nodeback
+     */
+    defer.prototype.makeNodeResolver = function () {
+        var self = this;
+        return function (error, value) {
+            if (error) {
+                self.reject(error);
+            } else if (arguments.length > 2) {
+                self.resolve(array_slice(arguments, 1));
+            } else {
+                self.resolve(value);
+            }
+        };
+    };
+    //defer定义结束
+
+    //Q.Promise Q.promise promise静态方法
+    promise.race = race; // ES6
+    promise.all = all; // ES6
+    promise.reject = reject; // ES6
+    promise.resolve = Q; // ES6
+
+    Promise.prototype.toString = function () {
+        return "[object Promise]";
+    };
+
+// XXX experimental.  This method is a way to denote that a local value is
+// serializable and should be immediately dispatched to a remote upon request,
+// instead of passing a reference.
+    Q.passByCopy = function (object) {
+        //freeze(object);
+        //passByCopies.set(object, true);
+        return object;
+    };
+
+    Promise.prototype.passByCopy = function () {
+        //freeze(object);
+        //passByCopies.set(object, true);
+        return this;
+    };
+
+    /**
+     * If two promises eventually fulfill to the same value, promises that value,
+     * but otherwise rejects.
+     * @param x {Any*}
+     * @param y {Any*}
+     * @returns {Any*} a promise for x and y if they are the same, but a rejection
+     * otherwise.
+     *
+     */
+    Q.join = function (x, y) {
+        return Q(x).join(y);
+    };
+
+    Promise.prototype.join = function (that) {
+        return Q([this, that]).spread(function (x, y) {
+            if (x === y) {
+                // TODO: "===" should be Object.is or equiv
+                return x;
+            } else {
+                throw new Error("Q can't join: not the same: " + x + " " + y);
+            }
+        });
+    };
+
+    /**
+     * Returns a promise for the first of an array of promises to become settled.
+     * @param answers {Array[Any*]} promises to race
+     * @returns {Any*} the first promise to be settled
+     */
+    Q.race = race;
+    function race(answerPs) {
+        return promise(function (resolve, reject) {
+            // Switch to this once we can assume at least ES5
+            // answerPs.forEach(function (answerP) {
+            //     Q(answerP).then(resolve, reject);
+            // });
+            // Use this in the meantime
+            for (var i = 0, len = answerPs.length; i < len; i++) {
+                Q(answerPs[i]).then(resolve, reject);
+            }
+        });
+    }
+
+Promise.prototype.race = function () {
+    return this.then(Q.race);
 };
 
-Q.tap = function (promise, callback) {
+ Q.tap = function (promise, callback) {
     return Q(promise).tap(callback);
 };
 
@@ -942,7 +1111,7 @@ Q.nearer = nearer;
 function nearer(value) {
     if (isPromise(value)) {
         var inspected = value.inspect();
-        if (inspected.state === "fulfilled") {
+        if (inspected.state === "fulfilled") {//状态为完成返回其值
             return inspected.value;
         }
     }
@@ -959,7 +1128,7 @@ function isPromise(object) {
 }
 
 Q.isPromiseAlike = isPromiseAlike;
-function isPromiseAlike(object) {
+function isPromiseAlike(object) {//是对象，并且有then方法
     return isObject(object) && typeof object.then === "function";
 }
 
@@ -1084,7 +1253,7 @@ resetUnhandledRejections();
  * @param reason value describing the failure
  */
 Q.reject = reject;
-function reject(reason) {
+function reject(reason) {//执行拒绝方法
     var rejection = Promise({
         "when": function (rejected) {
             // note that the error has been handled
@@ -1105,61 +1274,6 @@ function reject(reason) {
     return rejection;
 }
 
-/**
- * Constructs a fulfilled promise for an immediate reference.
- * @param value immediate reference
- */
-Q.fulfill = fulfill;
-function fulfill(value) {
-    return Promise({
-        "when": function () {
-            return value;
-        },
-        "get": function (name) {
-            return value[name];
-        },
-        "set": function (name, rhs) {
-            value[name] = rhs;
-        },
-        "delete": function (name) {
-            delete value[name];
-        },
-        "post": function (name, args) {
-            // Mark Miller proposes that post with no name should apply a
-            // promised function.
-            if (name === null || name === void 0) {
-                return value.apply(void 0, args);
-            } else {
-                return value[name].apply(value, args);
-            }
-        },
-        "apply": function (thisp, args) {
-            return value.apply(thisp, args);
-        },
-        "keys": function () {
-            return object_keys(value);
-        }
-    }, void 0, function inspect() {
-        return { state: "fulfilled", value: value };
-    });
-}
-
-/**
- * Converts thenables to Q promises.
- * @param promise thenable promise
- * @returns a Q promise
- */
-function coerce(promise) {
-    var deferred = defer();
-    Q.nextTick(function () {
-        try {
-            promise.then(deferred.resolve, deferred.reject, deferred.notify);
-        } catch (exception) {
-            deferred.reject(exception);
-        }
-    });
-    return deferred.promise;
-}
 
 /**
  * Annotates an object such that it will never be
@@ -1171,12 +1285,12 @@ function coerce(promise) {
  * without a rejection.
  */
 Q.master = master;
-function master(object) {
+function master(object) {//Promise(descriptor, fallback, inspect)
     return Promise({
-        "isDef": function () {}
-    }, function fallback(op, args) {
-        return dispatch(object, op, args);
-    }, function () {
+        "isDef": function () {}//
+    }, function fallback(op, args) {//
+        return dispatch(object, op, args);//
+    }, function () {//
         return Q(object).inspect();
     });
 }
@@ -1320,50 +1434,6 @@ function _return(value) {
     throw new QReturnValue(value);
 }
 
-/**
- * The promised function decorator ensures that any promise arguments
- * are settled and passed as values (`this` is also settled and passed
- * as a value).  It will also ensure that the result of a function is
- * always a promise.
- *
- * @example
- * var add = Q.promised(function (a, b) {
- *     return a + b;
- * });
- * add(Q(a), Q(B));
- *
- * @param {function} callback The function to decorate
- * @returns {function} a function that has been decorated.
- */
-Q.promised = promised;
-function promised(callback) {
-    return function () {
-        return spread([this, all(arguments)], function (self, args) {
-            return callback.apply(self, args);
-        });
-    };
-}
-
-/**
- * sends a message to a value in a future turn
- * @param object* the recipient
- * @param op the name of the message operation, e.g., "when",
- * @param args further arguments to be forwarded to the operation
- * @returns result {Promise} a promise for the result of the operation
- */
-Q.dispatch = dispatch;
-function dispatch(object, op, args) {
-    return Q(object).dispatch(op, args);
-}
-
-Promise.prototype.dispatch = function (op, args) {
-    var self = this;
-    var deferred = defer();
-    Q.nextTick(function () {
-        self.promiseDispatch(deferred.resolve, op, args);
-    });
-    return deferred.promise;
-};
 
 /**
  * Gets the value of a property in a future turn.
@@ -1466,20 +1536,6 @@ Promise.prototype.fapply = function (args) {
 };
 
 /**
- * Calls the promised function in a future turn.
- * @param object    promise or immediate reference for target function
- * @param ...args   array of application arguments
- */
-Q["try"] =
-Q.fcall = function (object /* ...args*/) {
-    return Q(object).dispatch("apply", [void 0, array_slice(arguments, 1)]);
-};
-
-Promise.prototype.fcall = function (/*...args*/) {
-    return this.dispatch("apply", [void 0, array_slice(arguments)]);
-};
-
-/**
  * Binds the promised function, transforming return values into a fulfilled
  * promise and thrown errors into a rejected one.
  * @param object    promise or immediate reference for target function
@@ -1569,6 +1625,7 @@ Promise.prototype.all = function () {
     return all(this);
 };
 
+
 /**
  * Returns the first resolved promise of an array. Prior rejected promises are
  * ignored.  Rejects only if all promises are rejected.
@@ -1585,6 +1642,7 @@ function any(promises) {
 
     var deferred = Q.defer();
     var pendingCount = 0;
+    //数组中的每个值（从左到右）开始缩减，最终为一个值
     array_reduce(promises, function (prev, current, index) {
         var promise = promises[index];
 
@@ -1739,41 +1797,6 @@ Promise.prototype["finally"] = function (callback) {
     });
 };
 
-/**
- * Terminates a chain of promises, forcing rejections to be
- * thrown as exceptions.
- * @param {Any*} promise at the end of a chain of promises
- * @returns nothing
- */
-Q.done = function (object, fulfilled, rejected, progress) {
-    return Q(object).done(fulfilled, rejected, progress);
-};
-
-Promise.prototype.done = function (fulfilled, rejected, progress) {
-    var onUnhandledError = function (error) {
-        // forward to a future turn so that ``when``
-        // does not catch it and turn it into a rejection.
-        Q.nextTick(function () {
-            makeStackTraceLong(error, promise);
-            if (Q.onerror) {
-                Q.onerror(error);
-            } else {
-                throw error;
-            }
-        });
-    };
-
-    // Avoid unnecessary `nextTick`ing via an unnecessary `when`.
-    var promise = fulfilled || rejected || progress ?
-        this.then(fulfilled, rejected, progress) :
-        this;
-
-    if (typeof process === "object" && process && process.domain) {
-        onUnhandledError = process.domain.bind(onUnhandledError);
-    }
-
-    promise.then(void 0, onUnhandledError);
-};
 
 /**
  * Causes a promise to be rejected if it does not get fulfilled before
@@ -1808,6 +1831,7 @@ Promise.prototype.timeout = function (ms, error) {
 
     return deferred.promise;
 };
+
 
 /**
  * Returns a promise for the given value (or promised value), some
@@ -1952,6 +1976,7 @@ Promise.prototype.npost = function (name, args) {
     return deferred.promise;
 };
 
+
 /**
  * Calls a method of a Node-style object that accepts a Node-style
  * callback, forwarding the given variadic arguments, plus a provided
@@ -2013,6 +2038,9 @@ Promise.prototype.nodeify = function (nodeback) {
     }
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/** *************************************************************************************************************     */
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 Q.noConflict = function() {
     throw new Error("Q.noConflict only works when Q is used as a global");
 };
@@ -2020,6 +2048,299 @@ Q.noConflict = function() {
 // All code before this point will be filtered from stack traces.
 var qEndingLine = captureLine();
 
+
+    var array_slice = uncurryThis(Array.prototype.slice);
+
+    var array_indexOf = uncurryThis(
+        Array.prototype.indexOf || function (value) {
+            // not a very good shim, but good enough for our one use of it
+            for (var i = 0; i < this.length; i++) {
+                if (this[i] === value) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+    );
+
+    var array_map = uncurryThis(
+        Array.prototype.map || function (callback, thisp) {
+            var self = this;//
+            var collect = [];            //初始值   值     值的索引
+            array_reduce(self, function (undefined, value, index) {
+                collect.push(callback.call(thisp, value, index, self));//key value
+            }, void 0);
+            return collect;
+        }
+    );
+
+    var object_create = Object.create || function (prototype) {
+            function Type() { }
+            Type.prototype = prototype;//返回原型
+            return new Type();
+        };
+
+    var object_hasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+
+    var object_keys = Object.keys || function (object) {
+            var keys = [];
+            for (var key in object) {
+                if (object_hasOwnProperty(object, key)) {
+                    keys.push(key);
+                }
+            }
+            return keys;
+        };
+
+    var object_toString = uncurryThis(Object.prototype.toString);
+
+    function isObject(value) {
+        return value === Object(value);
+    }
+
+// generator related shims
+
+// FIXME: Remove this function once ES6 generators are in SpiderMonkey.
+    function isStopIteration(exception) {
+        return (
+            object_toString(exception) === "[object StopIteration]" ||
+            exception instanceof QReturnValue
+        );
+    }
+
+// FIXME: Remove this helper and Q.return once ES6 generators are in
+// SpiderMonkey.
+    var QReturnValue;
+    if (typeof ReturnValue !== "undefined") {
+        QReturnValue = ReturnValue;
+    } else {
+        QReturnValue = function (value) {
+            this.value = value;
+        };
+    }
+
+// long stack traces
+
+    var STACK_JUMP_SEPARATOR = "From previous event:";
+
+    function makeStackTraceLong(error, promise) {
+        // If possible, transform the error stack trace by removing Node and Q
+        // cruft, then concatenating with the stack trace of `promise`. See #57.
+        if (hasStacks &&
+            promise.stack &&
+            typeof error === "object" &&
+            error !== null &&
+            error.stack &&
+            error.stack.indexOf(STACK_JUMP_SEPARATOR) === -1
+        ) {
+            var stacks = [];
+            for (var p = promise; !!p; p = p.source) {
+                if (p.stack) {
+                    stacks.unshift(p.stack);
+                }
+            }
+            stacks.unshift(error.stack);
+
+            var concatedStacks = stacks.join("\n" + STACK_JUMP_SEPARATOR + "\n");
+            error.stack = filterStackString(concatedStacks);
+        }
+    }
+
+    function filterStackString(stackString) {
+        var lines = stackString.split("\n");
+        var desiredLines = [];
+        for (var i = 0; i < lines.length; ++i) {
+            var line = lines[i];
+
+            if (!isInternalFrame(line) && !isNodeFrame(line) && line) {
+                desiredLines.push(line);
+            }
+        }
+        return desiredLines.join("\n");
+    }
+
+    function isNodeFrame(stackLine) {
+        return stackLine.indexOf("(module.js:") !== -1 ||
+            stackLine.indexOf("(node.js:") !== -1;
+    }
+
+    function getFileNameAndLineNumber(stackLine) {
+        // Named functions: "at functionName (filename:lineNumber:columnNumber)"
+        // In IE10 function name can have spaces ("Anonymous function") O_o
+        var attempt1 = /at .+ \((.+):(\d+):(?:\d+)\)$/.exec(stackLine);
+        if (attempt1) {
+            return [attempt1[1], Number(attempt1[2])];
+        }
+
+        // Anonymous functions: "at filename:lineNumber:columnNumber"
+        var attempt2 = /at ([^ ]+):(\d+):(?:\d+)$/.exec(stackLine);
+        if (attempt2) {
+            return [attempt2[1], Number(attempt2[2])];
+        }
+
+        // Firefox style: "function@filename:lineNumber or @filename:lineNumber"
+        var attempt3 = /.*@(.+):(\d+)$/.exec(stackLine);
+        if (attempt3) {
+            return [attempt3[1], Number(attempt3[2])];
+        }
+    }
+
+    function isInternalFrame(stackLine) {
+        var fileNameAndLineNumber = getFileNameAndLineNumber(stackLine);
+
+        if (!fileNameAndLineNumber) {
+            return false;
+        }
+
+        var fileName = fileNameAndLineNumber[0];
+        var lineNumber = fileNameAndLineNumber[1];
+
+        return fileName === qFileName &&
+            lineNumber >= qStartingLine &&
+            lineNumber <= qEndingLine;
+    }
+
+// discover own file name and line number range for filtering stack
+// traces
+    function captureLine() {
+        if (!hasStacks) {
+            return;
+        }
+
+        try {
+            throw new Error();
+        } catch (e) {
+            var lines = e.stack.split("\n");
+            var firstLine = lines[0].indexOf("@") > 0 ? lines[1] : lines[2];
+            var fileNameAndLineNumber = getFileNameAndLineNumber(firstLine);
+            if (!fileNameAndLineNumber) {
+                return;
+            }
+
+            qFileName = fileNameAndLineNumber[0];
+            return fileNameAndLineNumber[1];
+        }
+    }
+//过时方法
+    function deprecate(callback, name, alternative) {
+        return function () {
+            if (typeof console !== "undefined" &&
+                typeof console.warn === "function") {
+                console.warn(name + " is deprecated, use " + alternative +
+                    " instead.", new Error("").stack);
+            }
+            return callback.apply(callback, arguments);
+        };
+    }
+
+// end of shims
+
 return Q;
 
 });
+
+
+
+//Q.passByCopy
+//Q.join
+//Q.race
+//Q.tap
+//Q.when
+//Q.thenResolve
+//Q.thenReject
+//Q.nearer
+//Q.isPromise
+// Q.isPromiseAlike
+//Q.isPending
+//Q.isFulfilled
+//Q.isRejected
+//Q.resetUnhandledRejections
+//Q.getUnhandledReasons
+//Q.stopUnhandledRejectionTracking
+//Q.reject
+//Q.fulfill
+//Q.master = master
+//Q.spread
+//Q.async
+//Q.spawn
+//Q.promised
+//Q.dispatch
+//Q.get
+//Q.set
+// Q.del
+//Q.mapply
+//Q.fapply
+//Q.fcall
+//Q.fbind
+//Q.keys
+//Q.all
+//Q.any
+//Q.allResolved
+//Q.allSettled
+//Q.fail
+//Q.progress
+//Q.fin
+//Q.done
+//Q.timeout
+//Q.delay
+//Q.nfapply
+//Q.nfcall
+//Q.nfbind
+//Q.denodeify
+//Q.nmapply
+//Q.npost
+//Q.nsend
+//Q.nmcall
+//Q.ninvoke
+//Q.nodeify
+
+//Promise.prototype.passByCopy
+// Promise.prototype.join
+//Promise.prototype.race
+//Promise.prototype.toString
+//Promise.prototype.then
+//Promise.prototype.tap
+//Promise.prototype.thenResolve
+//Promise.prototype.thenReject
+//Promise.prototype.isPending
+//Promise.prototype.isFulfilled
+//Promise.prototype.isRejected
+//Promise.prototype.spread
+//Promise.prototype.dispatch
+//Promise.prototype.get
+//Promise.prototype.set
+//Promise.prototype.del
+// Promise.prototype.mapply
+//Promise.prototype.post
+//Promise.prototype.send = // XXX Mark Miller's proposed parlance
+//Promise.prototype.mcall = // XXX As proposed by "Redsandro"
+//Promise.prototype.invoke
+//Promise.prototype.fapply
+//Promise.prototype.fcall
+//Promise.prototype.fbind
+//Promise.prototype.keys
+//Promise.prototype.all
+//Promise.prototype.any
+//Promise.prototype.allResolved
+//Promise.prototype.allSettled
+//Promise.prototype.fail
+//Promise.prototype.progress
+//Promise.prototype.fin
+//Promise.prototype.done
+//Promise.prototype.timeout
+//Promise.prototype.delay
+//Promise.prototype.nfapply
+//Promise.prototype.nfcall
+//Promise.prototype.nfbind
+//Promise.prototype.denodeify
+//Promise.prototype.nbind
+//Promise.prototype.nmapply
+//Promise.prototype.npost
+//Promise.prototype.nsend
+//Promise.prototype.nmcall
+//Promise.prototype.ninvoke
+//Promise.prototype.nodeify
+
+//Q["delete"]
+//Q["try"]
+//Promise.prototype["delete"]
