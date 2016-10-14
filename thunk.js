@@ -61,7 +61,7 @@ d=generator.next(d.value);//4
 d=generator.next(d.value);//5
 **/
 
-
+/**
 function f(a,b, cb) {
     var sum=a+b;
     //setInterval(test,5000);
@@ -73,7 +73,7 @@ function log(c){
     console.log("this log->",c);
 
 }
-
+**/
  /**
 var f_Q_t = thunkify(f_Promise);
 
@@ -111,20 +111,120 @@ function run(gen){
 run(gen);
  **/
 /**
-function f(a,b, callback) {//callback回调函数
+ var Thunk = function(fn){
+     console.log("匿名函数包裹:",fn);
+     return function (){
+         //arguments为再次调用的参数
+         //slice方法可从已有的数组中返回选定的元素。再次调用时的参数
+         var args = Array.prototype.slice.call(arguments);
+         console.log("参数:",args);
+         return function (callback){
+             //把上面的回调callback参数放入参数队列
+             args.push(callback);
+             //fn为原来输入的参数，执行原来的方法
+             return fn.apply(this, args);
+         }
+     };
+ };
+
+//callback回调函数
+function f(a,b, callback) {
     var sum=a+b;
     //setInterval(test,5000);
-    callback(sum);//回调函数,回调函数定义在thunkify
+    //回调函数,回调函数定义在thunkify
+    callback(sum);
     return sum;
 }
 
 function log(c){
     console.log("this log->",c);
 }
+//Thunk化
+var ft = Thunk(f);
+var f_f=ft(1,2);
+var r1=f_f(log) ;
+**/
+/**
+function dispatch() {
+    console.log("dispatch");
+}
 
-var ft = thunkify(f);
-//var f_f=ft(1,2);
-//var r1=f_f(log) // 1
+function extraArgument(){
+    console.log("extraArgument");
+}
+function next(action) {
+    console.log("next");
+    return action;
+}
+function  action(dispatch, initState,extraArgument) {
+    console.log("action,state",initState);
+    dispatch();
+    extraArgument();
+}
+
+function createThunkMiddleware(extraArgument) {
+    return function (_ref) {
+        var dispatch = _ref.dispatch;
+        var getState = _ref.getState;
+        return function (next) {
+            return function (action) {
+                if (typeof action === 'function') {
+                    return action(dispatch, getState, extraArgument);
+                }
+                return next(action);
+            };
+        };
+    };
+}
+
+//Thunk化
+var thunk_extraArgument = createThunkMiddleware(extraArgument);
+var thunk_dispatch=thunk_extraArgument({dispatch:dispatch,getState:"initState"});
+var thunk_next=thunk_dispatch(next) ;
+var thunk_action=thunk_next("action") ;
+createThunkMiddleware(extraArgument)({dispatch:dispatch,getState:"initState"})(next)(action);
+//thunk_action();
+**/
+function compose() {
+    for (var _len = arguments.length, funcs =
+        Array(_len), _key = 0; _key < _len; _key++) {
+        funcs[_key] = arguments[_key];
+    }
+    if (funcs.length === 0) {
+        return function (arg) {
+            return arg;
+        };
+    }
+    if (funcs.length === 1) {
+        return funcs[0];
+    }
+
+    var last = funcs[funcs.length - 1];
+    var rest = funcs.slice(0, -1);
+    return function () {
+        //reduceRight()从数组的末尾向前将数组中的数组项做累加。
+        //arr.reduceRight(function (preValue,curValue,index,array)
+        return rest.reduceRight(function (composed, f) {//以前值，当前值
+                 return f(composed);
+            },
+            last.apply(undefined, arguments)//此项为初始值
+        );//右计算结束
+    };
+}
+
+function first(composed) {
+    return "first";
+}
+function second(composed) {
+    return "second";
+}
+function third(composed) {
+    return "third";
+}
+var f=compose(first,second,third);
+f();
+console.log("over")
+/**
 var genThunify = function* (){
     console.log("genThunify enter");
     var r1 = yield ft(1, 2);
@@ -133,8 +233,8 @@ var genThunify = function* (){
     console.log("r2*->",r2);
 };
 
-**/
-/**
+
+
 var generatorFlow  = genThunify();
 
 var f1=generatorFlow.next();

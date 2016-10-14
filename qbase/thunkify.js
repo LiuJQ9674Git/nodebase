@@ -1,6 +1,7 @@
 module.exports = thunkify;
 
 function thunkify(fn){
+     //返回匿名函数
       return function(){
         //获取多个  
         var args = new Array(arguments.length);
@@ -9,8 +10,8 @@ function thunkify(fn){
         for(var i = 0; i < args.length; ++i) {
             args[i] = arguments[i];
         }
-
-        return function(done){//thunkify function
+        //thunkify function
+        return function(done){
             var called;
 
             args.push(function(){//回调函数
